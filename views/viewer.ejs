@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #remoteVideo {
+            width: 100%;
+            max-width: 640px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            background-color: #f0f0f0;
+            /* To make video area visible even when no video */
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            width: 100%;
+            max-width: 640px;
+            text-align: center;
+        }
+
+        .online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .waiting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .controls {
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 8px 16px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 0 5px;
+        }
+
+        button:hover {
+            background-color: #3367d6;
+        }
+
+        #debugInfo {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            width: 100%;
+            max-width: 640px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebRTC Viewer</h1>
+    <div class="container">
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div class="controls">
+            <button id="refreshButton">Refresh Connection</button>
+        </div>
+        <div id="status" class="status offline">
+            Status: No broadcast available
+        </div>
+        <div id="debugInfo">Debug information will appear here...</div>
+    </div>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const socket = io();
+            const remoteVideo = document.getElementById("remoteVideo");
+            const statusElement = document.getElementById("status");
+            const refreshButton = document.getElementById("refreshButton");
+            const debugInfo = document.getElementById("debugInfo");
+            const roomId = prompt("enter stream room")
+            socket.emit('join', roomId)
+            socket.on('user_connected', (room) => {
+                console.log('you are connected to room ', room)
+            })
+            refreshButton.addEventListener('click', () => {
+                socket.emit("viewer_request", roomId);
+            })
+            socket.on("viewer_offer", (description) => {
+                setupPeerConnection(description);
+            });
+            socket.on("viewer_ice_candidate", (candidate) => {
+                if (peerConnection) {
+                    console.log("Received ICE candidate from server");
+                    peerConnection
+                        .addIceCandidate(new RTCIceCandidate(candidate))
+                        .catch((error) => {
+                            console.error("Error adding ICE candidate:", error);
+                            logDebug(`Error adding ICE candidate: ${error.message}`);
+                        });
+                }
+            });
+
+            // Set up WebRTC peer connection
+            function setupPeerConnection(offer) {
+                const configuration = {
+                    iceServers: [
+                        {
+                            urls: "stun:stun.relay.metered.ca:80",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:80",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:80?transport=tcp",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:443",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turns:global.relay.metered.ca:443?transport=tcp",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                    ],
+                };
+
+
+                peerConnection = new RTCPeerConnection(configuration);
+
+                // Handle incoming tracks
+                peerConnection.ontrack = (event) => {
+                    console.log(`Received track: ${event.track.kind}`);
+
+                    if (!remoteVideo.srcObject) {
+                        console.log("Setting new stream to video element");
+                        remoteVideo.srcObject = new MediaStream();
+                    }
+
+                    // Add this track to the existing stream
+                    remoteVideo.srcObject.addTrack(event.track);
+                    console.log(
+                        `Video now has ${remoteVideo.srcObject.getTracks().length
+                        } tracks: ${remoteVideo.srcObject
+                            .getTracks()
+                            .map((t) => t.kind)
+                            .join(", ")}`
+                    );
+
+                    console.log("Connected to broadcast", "online");
+                };
+
+                // ICE candidate handling
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit("viewer_ice_candidate", event.candidate);
+                    }
+                };
+
+                // Connection state change
+                peerConnection.onconnectionstatechange = (event) => {
+                    console.log(
+                        `Connection state changed to: ${peerConnection.connectionState}`
+                    );
+
+                    if (peerConnection.connectionState === "connected") {
+                        console.log("Connected to broadcast", "online");
+                    } else if (
+                        peerConnection.connectionState === "disconnected" ||
+                        peerConnection.connectionState === "failed"
+                    ) {
+                        console.log("Broadcast connection lost", "offline");
+
+                        // Auto retry for failed connections (with limit)
+                        if (
+                            peerConnection.connectionState === "failed" &&
+                            retryCount < MAX_RETRIES
+                        ) {
+                            retryCount++;
+                            console.log(
+                                `Connection failed. Retry attempt ${retryCount}/${MAX_RETRIES}`
+                            );
+                            setTimeout(requestBroadcast, 2000);
+                        }
+                    }
+                };
+
+                // ICE connection state change
+                peerConnection.oniceconnectionstatechange = (event) => {
+                    console.log(
+                        `ICE connection state changed to: ${peerConnection.iceConnectionState}`
+                    );
+                };
+
+                // Set remote description (offer from server)
+                peerConnection
+                    .setRemoteDescription(offer)
+                    .then(() => {
+                        console.log("Remote description set successfully, creating answer");
+                        return peerConnection.createAnswer();
+                    })
+                    .then((answer) => {
+                        console.log("Answer created, setting local description");
+                        return peerConnection.setLocalDescription(answer);
+                    })
+                    .then(() => {
+                        console.log("Local description set, sending answer to server");
+                        socket.emit("viewer_answer", peerConnection.localDescription);
+                    })
+                    .catch((error) => {
+                        console.error("Error setting up peer connection:", error);
+                        console.log(`Connection error: ${error.message}`);
+                        console.log(`Connection error: ${error.message}`, "offline");
+                    });
+            }
+
+        })
+    </script>
+    <script src="/socket.io/socket.io.js"></script>
+</body>
+
+</html>

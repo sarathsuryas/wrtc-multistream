@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #localVideo {
+            width: 100%;
+            max-width: 640px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 15px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #3367d6;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+    <title>Broadcaster</title>
+
+</head>
+
+<body>
+    <h1 id="test">WebRTC Broadcaster</h1>
+    <div class="container">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <div class="controls">
+            <button id="roomButton">Create Room</button>
+            <button id="startButton">Start Camera</button>
+            <button id="broadcastButton" disabled>Start Broadcasting</button>
+            <button id="stopButton" disabled>Stop Broadcasting</button>
+        </div>
+        <div id="status" class="status offline">Status: Not Broadcasting</div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const socket = io();
+            let roomId = ''
+            let localStream;
+            let peerConnection;
+            let isBroadcasting = false;
+            const startButton = document.getElementById('startButton')
+            startButton.disabled = true;
+            const broadcastButton = document.getElementById('broadcastButton')
+            const createRoomButton = document.getElementById('roomButton')
+            const stopButton = document.getElementById('stopButton')
+            createRoomButton.addEventListener('click', () => {
+                roomId = prompt('enter room Id')
+                socket.emit("create_room", roomId)
+            })
+            socket.on("room_created", () => {
+                startButton.disabled = false;
+
+            })
+            startButton.addEventListener('click', async () => {
+                try {
+                    const videoElement = document.getElementById('localVideo')
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                    videoElement.srcObject = localStream
+                    broadcastButton.disabled = false
+                } catch (error) {
+                    console.error(error)
+                    alert("media devices error")
+                }
+            })
+            broadcastButton.addEventListener('click', () => {
+                if (!localStream) {
+                    alert("camera is not on")
+                    return;
+                }
+                socket.emit('start_broadcast')
+            })
+
+            stopButton.addEventListener('click', () => {
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+
+                isBroadcasting = false;
+                stopButton.disabled = true;
+                socket.emit('stop', roomId)
+            })
+            socket.on('start_broadcast', () => {
+                try {
+                    setupPeerConnection()
+                } catch (error) {
+                    console.error(error)
+                    alert('error in start broadcast')
+                }
+            });
+            function setupPeerConnection() {
+                const configuration = {
+                    iceServers: [
+                        {
+                            urls: "stun:stun.relay.metered.ca:80",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:80",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:80?transport=tcp",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turn:global.relay.metered.ca:443",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                        {
+                            urls: "turns:global.relay.metered.ca:443?transport=tcp",
+                            username: "836c17083ecba16b626af6f7",
+                            credential: "j/Du96pT1PjJXgP/",
+                        },
+                    ],
+                };
+
+                peerConnection = new RTCPeerConnection(configuration);
+                // Attach the debugging event listeners immediately
+                peerConnection.onconnectionstatechange = () => {
+                    console.log(`Broadcaster connection state: ${peerConnection.connectionState}`);
+                    if (peerConnection.connectionState === 'connected') {
+                        stopButton.disabled = false
+                        console.log('Broadcaster fully connected!');
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    console.log(`Broadcaster ICE connection state: ${peerConnection.iceConnectionState}`);
+                };
+
+
+                // Add all tracks from local stream to the peer connection
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                // ICE candidate handling
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('broadcaster_ice_candidate', { candidate: event.candidate, roomId: roomId });
+                    }
+                };
+
+                // Create offer
+                peerConnection.createOffer()
+                    .then(offer => {
+                        return peerConnection.setLocalDescription(offer)
+                    })
+                    .then(() => {
+                        socket.emit('broadcaster_offer', { offer: peerConnection.localDescription, roomId: roomId });
+                    })
+                    .catch(error => {
+                        console.error('Error creating offer:', error);
+                    });
+            }
+            socket.on('broadcaster_answer', (description) => {
+                // console.log('answer,//////', description)
+                peerConnection.setRemoteDescription(description)
+                    .catch(error => {
+                        console.error('Error setting remote description:', error);
+                    });
+            });
+            socket.on('broadcaster_ice_candidate', (candidate) => {
+                if (peerConnection) {
+
+                    //    console.log('candidate from answer',candidate)
+                    peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
+                        .catch(error => {
+                            console.error('Error adding ICE candidate:', error);
+                        });
+                }
+            });
+            socket.on('user_connected',(room)=>{
+                console.log('viewer connected to room ',room)
+            })
+
+            // Handle page unload
+            window.addEventListener('beforeunload', () => {
+                if (isBroadcasting) {
+                    socket.emit('disconnect');
+                }
+
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+            });
+
+
+        })
+
+
+    </script>
+    <script src="/socket.io/socket.io.js"></script>
+</body>
+
+</html>
