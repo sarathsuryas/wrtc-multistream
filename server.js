@@ -160,7 +160,7 @@ io.on('connection', (socket) => {
       
       // Check if we have tracks to send
       let tracksAdded = false;
-      const broadcaster = broadcasters.find(obj=>obj.roomId)
+      const broadcaster = broadcasters.find(obj=>obj.roomId === roomId)
     
       if (broadcaster && broadcaster.mediaStream.getTracks().length > 0) {
         console.log(`Adding ${ broadcaster.mediaStream.getTracks().length} tracks to viewer ${socket.id}`);
@@ -238,7 +238,7 @@ function createPeerConnection(roomId,socket) {
       broadcasters.push(room)
 } 
 
-const PORT = process.env.PORT || 4000;
+const PORT =  4000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Broadcast page: http://localhost:${PORT}/broadcast`);
